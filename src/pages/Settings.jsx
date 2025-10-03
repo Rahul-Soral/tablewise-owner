@@ -1,0 +1,355 @@
+import { useState, useEffect } from 'react'
+import { motion } from 'framer-motion'
+import { Save, Globe, Zap } from 'lucide-react'
+import { API_CONFIG } from '../config/api'
+import { useToast } from '../components/Toast'
+
+/**
+ * Settings Page
+ * Application and user settings management
+ * Includes API endpoint configuration and proxy toggle
+ */
+function Settings() {
+  const { showToast } = useToast()
+  
+  // TODO: Connect to actual settings state/API
+  const [settings, setSettings] = useState({
+    businessName: 'My Business',
+    email: 'owner@business.com',
+    phone: '',
+    address: '',
+    notifications: {
+      emailNotifications: true,
+      orderUpdates: true,
+      weeklyReports: false,
+    },
+    api: {
+      useProxy: API_CONFIG.USE_PROXY,
+      proxyUrl: API_CONFIG.PROXY_URL || '',
+      pollingInterval: API_CONFIG.POLLING_INTERVAL,
+    }
+  })
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target
+    setSettings(prev => ({
+      ...prev,
+      [name]: value,
+    }))
+  }
+
+  const handleNotificationChange = (e) => {
+    const { name, checked } = e.target
+    setSettings(prev => ({
+      ...prev,
+      notifications: {
+        ...prev.notifications,
+        [name]: checked,
+      },
+    }))
+  }
+
+  const handleApiChange = (e) => {
+    const { name, value, type, checked } = e.target
+    setSettings(prev => ({
+      ...prev,
+      api: {
+        ...prev.api,
+        [name]: type === 'checkbox' ? checked : value,
+      },
+    }))
+  }
+
+  const handleSave = () => {
+    // TODO: Implement save functionality
+    console.log('Saving settings:', settings)
+    showToast('Settings saved successfully! Reload page for API changes to take effect.', 'success')
+  }
+
+  const handleSaveApiSettings = () => {
+    // Save to localStorage to persist across reloads
+    localStorage.setItem('api_use_proxy', settings.api.useProxy)
+    localStorage.setItem('api_proxy_url', settings.api.proxyUrl)
+    localStorage.setItem('api_polling_interval', settings.api.pollingInterval)
+    
+    showToast('API settings saved! Please reload the page for changes to take effect.', 'success', 7000)
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Page Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        <h1 className="text-3xl font-bold text-stone-900">Settings</h1>
+        <p className="text-stone-600 mt-1">Manage your account and application preferences</p>
+      </motion.div>
+
+      {/* Settings Form */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Business Information */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card-elevated p-6"
+        >
+          <h2 className="text-xl font-semibold mb-4 text-stone-900">Business Information</h2>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-stone-700 mb-1">
+                Business Name
+              </label>
+              <input
+                type="text"
+                name="businessName"
+                value={settings.businessName}
+                onChange={handleInputChange}
+                className="input"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-700 mb-1">
+                Email
+              </label>
+              <input
+                type="email"
+                name="email"
+                value={settings.email}
+                onChange={handleInputChange}
+                className="input"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-700 mb-1">
+                Phone Number
+              </label>
+              <input
+                type="tel"
+                name="phone"
+                value={settings.phone}
+                onChange={handleInputChange}
+                className="input"
+                placeholder="+1 (555) 000-0000"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-700 mb-1">
+                Address
+              </label>
+              <textarea
+                name="address"
+                value={settings.address}
+                onChange={handleInputChange}
+                className="input"
+                rows="3"
+                placeholder="Business address"
+              />
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Notification Preferences */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="card-elevated p-6"
+        >
+          <h2 className="text-xl font-semibold mb-4 text-stone-900">Notification Preferences</h2>
+          
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium text-stone-700">
+                  Email Notifications
+                </label>
+                <p className="text-xs text-stone-500">Receive email notifications</p>
+              </div>
+              <input
+                type="checkbox"
+                name="emailNotifications"
+                checked={settings.notifications.emailNotifications}
+                onChange={handleNotificationChange}
+                className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium text-stone-700">
+                  Order Updates
+                </label>
+                <p className="text-xs text-stone-500">Get notified about new orders</p>
+              </div>
+              <input
+                type="checkbox"
+                name="orderUpdates"
+                checked={settings.notifications.orderUpdates}
+                onChange={handleNotificationChange}
+                className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium text-stone-700">
+                  Weekly Reports
+                </label>
+                <p className="text-xs text-stone-500">Receive weekly performance reports</p>
+              </div>
+              <input
+                type="checkbox"
+                name="weeklyReports"
+                checked={settings.notifications.weeklyReports}
+                onChange={handleNotificationChange}
+                className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
+              />
+            </div>
+          </div>
+        </motion.div>
+      </div>
+
+      {/* API Configuration */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.3 }}
+        className="card-elevated p-6"
+      >
+        <div className="flex items-center gap-2 mb-4">
+          <Globe className="w-5 h-5 text-primary-600" />
+          <h2 className="text-xl font-semibold text-stone-900">API Configuration</h2>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Current Endpoints */}
+          <div>
+            <h3 className="text-sm font-semibold text-stone-700 mb-3">Active Endpoints</h3>
+            <div className="space-y-2 text-xs">
+              <div className="p-3 bg-stone-50 rounded-lg">
+                <p className="font-medium text-stone-600 mb-1">Get Orders:</p>
+                <p className="text-stone-500 break-all font-mono">{API_CONFIG.GET_ORDERS_URL}</p>
+              </div>
+              <div className="p-3 bg-stone-50 rounded-lg">
+                <p className="font-medium text-stone-600 mb-1">Update Status:</p>
+                <p className="text-stone-500 break-all font-mono">{API_CONFIG.UPDATE_STATUS_URL}</p>
+              </div>
+              <div className="p-3 bg-stone-50 rounded-lg">
+                <p className="font-medium text-stone-600 mb-1">Analytics:</p>
+                <p className="text-stone-500 break-all font-mono">{API_CONFIG.ANALYTICS_URL}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Proxy Settings */}
+          <div>
+            <h3 className="text-sm font-semibold text-stone-700 mb-3">Proxy Settings</h3>
+            
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-3 bg-primary-50 border border-primary-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-primary-600" />
+                  <div>
+                    <label className="text-sm font-medium text-stone-700">
+                      Use Proxy
+                    </label>
+                    <p className="text-xs text-stone-500">Route requests through proxy server</p>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  name="useProxy"
+                  checked={settings.api.useProxy}
+                  onChange={handleApiChange}
+                  className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
+                />
+              </div>
+
+              {settings.api.useProxy && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                >
+                  <label className="block text-sm font-medium text-stone-700 mb-1">
+                    Proxy URL
+                  </label>
+                  <input
+                    type="url"
+                    name="proxyUrl"
+                    value={settings.api.proxyUrl}
+                    onChange={handleApiChange}
+                    className="input"
+                    placeholder="http://localhost:8080/api"
+                  />
+                  <p className="text-xs text-stone-500 mt-1">
+                    Proxy should accept ?target= parameter
+                  </p>
+                </motion.div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">
+                  Polling Interval (ms)
+                </label>
+                <input
+                  type="number"
+                  name="pollingInterval"
+                  value={settings.api.pollingInterval}
+                  onChange={handleApiChange}
+                  className="input"
+                  min="1000"
+                  max="30000"
+                  step="1000"
+                />
+                <p className="text-xs text-stone-500 mt-1">
+                  Current: {settings.api.pollingInterval}ms ({(settings.api.pollingInterval / 1000).toFixed(1)}s)
+                </p>
+              </div>
+
+              <button 
+                onClick={handleSaveApiSettings}
+                className="btn-primary w-full text-sm"
+              >
+                <Save className="w-4 h-4 inline mr-2" />
+                Save API Settings (Requires Reload)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 pt-6 border-t border-stone-200">
+          <h3 className="text-sm font-semibold text-stone-700 mb-2">
+            Note on CORS
+          </h3>
+          <p className="text-xs text-stone-600 leading-relaxed">
+            Apps Script endpoints support CORS by default. If you encounter issues, the app will automatically 
+            attempt a JSONP fallback for GET requests. For maximum compatibility, consider using a proxy server 
+            or enabling the proxy toggle above.
+          </p>
+        </div>
+      </motion.div>
+
+      {/* Save Button */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.4 }}
+        className="flex justify-end"
+      >
+        <button onClick={handleSave} className="btn-primary flex items-center gap-2">
+          <Save className="w-4 h-4" />
+          Save Business Settings
+        </button>
+      </motion.div>
+    </div>
+  )
+}
+
+export default Settings
