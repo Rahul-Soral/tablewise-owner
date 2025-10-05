@@ -27,7 +27,7 @@ const PROXY_URL = import.meta.env.VITE_PROXY_URL
 const API_CONFIG = {
   // All actions use the same base URL with different query parameters
   BASE_URL: APPS_SCRIPT_URL,
-  GET_ORDERS_URL: `${APPS_SCRIPT_URL}?action=getOrders&limit=100`,
+  GET_ORDERS_URL: `${APPS_SCRIPT_URL}?action=getOrders&limit=200`, // Fetch up to 200 orders
   UPDATE_STATUS_URL: APPS_SCRIPT_URL, // POST or GET with query params
   ANALYTICS_URL: `${APPS_SCRIPT_URL}?action=getAnalytics`,
   CUSTOMERS_URL: `${APPS_SCRIPT_URL}?action=getCustomers`,
@@ -129,9 +129,10 @@ apiClient.interceptors.response.use(
 
 /**
  * Cache management for offline support
+ * Using localStorage key: orders_snapshot_v1
  */
-const CACHE_KEY = 'cached_orders'
-const CACHE_TIMESTAMP_KEY = 'cached_orders_timestamp'
+const CACHE_KEY = 'orders_snapshot_v1'
+const CACHE_TIMESTAMP_KEY = 'orders_snapshot_v1_timestamp'
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
 function getCachedOrders() {
@@ -162,30 +163,54 @@ function setCachedOrders(orders) {
 
 /**
  * Fetch orders from API with offline support and JSONP fallback
+ * API returns: {"status":"ok","data":[...orders...]}
+ * @param {AbortSignal} signal - AbortController signal for cancellation
  * @returns {Promise<Array>} Array of orders
  */
-export const fetchOrders = async () => {
+export const fetchOrders = async (signal = null) => {
   try {
-    const url = getProxiedUrl(API_CONFIG.GET_ORDERS_URL)
+    // Cache-bust with timestamp
+    const cacheBust = `&_=${Date.now()}`
+    const url = getProxiedUrl(API_CONFIG.GET_ORDERS_URL + cacheBust)
     
-    // Try standard fetch first
+    // Try standard fetch first (NOT axios for better control)
     try {
-      const response = await apiClient.get(url)
-      const orders = response.data?.orders || response.data || []
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: signal,
+        headers: {
+          'Accept': 'application/json',
+        }
+      })
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      
+      const json = await response.json()
+      
+      // Handle API response format: {status, data} or raw array
+      const orders = json.data || json || []
       
       // Cache successful response
       setCachedOrders(orders)
       
       return orders
     } catch (fetchError) {
-      // If CORS error, try JSONP fallback
-      if (fetchError.message?.includes('CORS') || fetchError.code === 'ERR_NETWORK') {
-        console.warn('CORS error detected, attempting JSONP fallback...')
-        return await fetchOrdersWithJSONP()
+      // If CORS error or fetch failed, try JSONP fallback
+      if (fetchError.name === 'AbortError') {
+        throw fetchError // Don't retry on abort
       }
-      throw fetchError
+      
+      console.warn('Fetch failed, attempting JSONP fallback...', fetchError.message)
+      return await fetchOrdersWithJSONP()
     }
   } catch (error) {
+    if (error.name === 'AbortError') {
+      console.log('Fetch aborted')
+      return []
+    }
+    
     console.error('Error fetching orders:', error)
     
     // Try to return cached data on error
@@ -203,10 +228,11 @@ export const fetchOrders = async () => {
 
 /**
  * JSONP fallback for Apps Script GET requests
+ * API returns: {"status":"ok","data":[...orders...]}
  */
 function fetchOrdersWithJSONP() {
   return new Promise((resolve, reject) => {
-    const callbackName = `jsonp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const callbackName = `jsonp_orders_${Date.now()}`
     const script = document.createElement('script')
     const timeout = setTimeout(() => {
       cleanup()
@@ -221,16 +247,17 @@ function fetchOrdersWithJSONP() {
       }
     }
 
-    window[callbackName] = (data) => {
+    window[callbackName] = (json) => {
       cleanup()
-      const orders = data?.orders || data || []
+      // Handle API response format: {status, data} or raw array
+      const orders = json.data || json || []
       setCachedOrders(orders)
       resolve(orders)
     }
 
-    const url = API_CONFIG.GET_ORDERS_URL + 
-                (API_CONFIG.GET_ORDERS_URL.includes('?') ? '&' : '?') + 
-                `callback=${callbackName}`
+    // Add cache-bust and callback
+    const cacheBust = `_=${Date.now()}`
+    const url = `${API_CONFIG.GET_ORDERS_URL}&${cacheBust}&callback=${callbackName}`
     
     script.src = url
     script.onerror = () => {
@@ -245,7 +272,7 @@ function fetchOrdersWithJSONP() {
 /**
  * Update order status with POST first, then GET/JSONP fallback
  * Apps Script expects: { action: "update_status", order_id: "...", status: "..." }
- * @param {string} orderId - Order ID
+ * @param {string} orderId - Order ID (field name: order_id)
  * @param {string} status - New status
  * @returns {Promise<Object>} API response
  */
@@ -254,24 +281,41 @@ export const updateOrderStatus = async (orderId, status) => {
   try {
     const url = getProxiedUrl(API_CONFIG.UPDATE_STATUS_URL)
     
-    const response = await apiClient.post(url, {
-      action: 'update_status',
-      order_id: orderId,
-      status: status,
-      timestamp: new Date().toISOString()
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'update_status',
+        order_id: orderId,
+        status: status
+      })
     })
     
-    return response.data
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
+    const json = await response.json()
+    return json
   } catch (postError) {
     console.warn('POST request failed, attempting GET/JSONP fallback...', postError)
     
     // Fallback to GET with query parameters
     try {
-      const getUrl = `${API_CONFIG.UPDATE_STATUS_URL}?action=update_status&order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(status)}`
+      const cacheBust = `_=${Date.now()}`
+      const getUrl = `${API_CONFIG.UPDATE_STATUS_URL}?action=update_status&order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(status)}&${cacheBust}`
       const proxiedUrl = getProxiedUrl(getUrl)
       
-      const response = await apiClient.get(proxiedUrl)
-      return response.data
+      const response = await fetch(proxiedUrl)
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      
+      const json = await response.json()
+      return json
     } catch (getError) {
       console.warn('GET request failed, attempting JSONP fallback...', getError)
       
@@ -286,7 +330,7 @@ export const updateOrderStatus = async (orderId, status) => {
  */
 function updateOrderStatusWithJSONP(orderId, status) {
   return new Promise((resolve, reject) => {
-    const callbackName = `jsonp_update_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const callbackName = `jsonp_update_${Date.now()}`
     const script = document.createElement('script')
     const timeout = setTimeout(() => {
       cleanup()
@@ -301,12 +345,13 @@ function updateOrderStatusWithJSONP(orderId, status) {
       }
     }
 
-    window[callbackName] = (data) => {
+    window[callbackName] = (json) => {
       cleanup()
-      resolve(data)
+      resolve(json)
     }
 
-    const url = `${API_CONFIG.UPDATE_STATUS_URL}?action=update_status&order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(status)}&callback=${callbackName}`
+    const cacheBust = `_=${Date.now()}`
+    const url = `${API_CONFIG.UPDATE_STATUS_URL}?action=update_status&order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(status)}&${cacheBust}&callback=${callbackName}`
     
     script.src = url
     script.onerror = () => {
@@ -320,22 +365,32 @@ function updateOrderStatusWithJSONP(orderId, status) {
 
 /**
  * Get analytics data from Apps Script endpoint
+ * API returns: {"status":"ok","data":{...analytics...}}
  * @returns {Object} Analytics summary
  */
 export const getAnalytics = async () => {
   try {
-    const url = getProxiedUrl(API_CONFIG.ANALYTICS_URL)
+    const cacheBust = `&_=${Date.now()}`
+    const url = getProxiedUrl(API_CONFIG.ANALYTICS_URL + cacheBust)
     
     try {
-      const response = await apiClient.get(url)
-      return response.data?.analytics || response.data
-    } catch (fetchError) {
-      // If CORS error, try JSONP fallback
-      if (fetchError.message?.includes('CORS') || fetchError.code === 'ERR_NETWORK') {
-        console.warn('CORS error on analytics, attempting JSONP...')
-        return await fetchAnalyticsWithJSONP()
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        }
+      })
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
       }
-      throw fetchError
+      
+      const json = await response.json()
+      // Handle API response format: {status, data} or raw object
+      return json.data || json
+    } catch (fetchError) {
+      console.warn('Fetch failed, attempting JSONP fallback...', fetchError.message)
+      return await fetchAnalyticsWithJSONP()
     }
   } catch (error) {
     console.error('Error fetching analytics:', error)
@@ -351,23 +406,33 @@ export const getAnalytics = async () => {
 
 /**
  * Get customers data from Apps Script endpoint
+ * API returns: {"status":"ok","data":[...customers...]}
  * @returns {Array} Customers array
  */
 export const getCustomers = async () => {
   try {
-    const url = getProxiedUrl(API_CONFIG.CUSTOMERS_URL)
+    const cacheBust = `&_=${Date.now()}`
+    const url = getProxiedUrl(API_CONFIG.CUSTOMERS_URL + cacheBust)
     
     try {
-      const response = await apiClient.get(url)
-      const customers = response.data?.customers || response.data || []
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        }
+      })
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      
+      const json = await response.json()
+      // Handle API response format: {status, data} or raw array
+      const customers = json.data || json || []
       return customers
     } catch (fetchError) {
-      // If CORS error, try JSONP fallback
-      if (fetchError.message?.includes('CORS') || fetchError.code === 'ERR_NETWORK') {
-        console.warn('CORS error on customers, attempting JSONP...')
-        return await fetchCustomersWithJSONP()
-      }
-      throw fetchError
+      console.warn('Fetch failed, attempting JSONP fallback...', fetchError.message)
+      return await fetchCustomersWithJSONP()
     }
   } catch (error) {
     console.error('Error fetching customers:', error)
@@ -376,7 +441,36 @@ export const getCustomers = async () => {
 }
 
 /**
+ * Clear sample data from Apps Script
+ * @returns {Promise<Object>} API response
+ */
+export const clearSampleData = async () => {
+  try {
+    const cacheBust = `_=${Date.now()}`
+    const url = `${API_CONFIG.BASE_URL}?action=clear_sample_data&${cacheBust}`
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      }
+    })
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
+    const json = await response.json()
+    return json
+  } catch (error) {
+    console.error('Error clearing sample data:', error)
+    throw error
+  }
+}
+
+/**
  * JSONP fallback for analytics
+ * API returns: {"status":"ok","data":{...analytics...}}
  */
 function fetchAnalyticsWithJSONP() {
   return new Promise((resolve, reject) => {
@@ -395,12 +489,14 @@ function fetchAnalyticsWithJSONP() {
       }
     }
 
-    window[callbackName] = (data) => {
+    window[callbackName] = (json) => {
       cleanup()
-      resolve(data?.analytics || data)
+      // Handle API response format: {status, data} or raw object
+      resolve(json.data || json)
     }
 
-    const url = API_CONFIG.ANALYTICS_URL + '&callback=' + callbackName
+    const cacheBust = `_=${Date.now()}`
+    const url = `${API_CONFIG.ANALYTICS_URL}&${cacheBust}&callback=${callbackName}`
     
     script.src = url
     script.onerror = () => {
@@ -414,6 +510,7 @@ function fetchAnalyticsWithJSONP() {
 
 /**
  * JSONP fallback for customers
+ * API returns: {"status":"ok","data":[...customers...]}
  */
 function fetchCustomersWithJSONP() {
   return new Promise((resolve, reject) => {
@@ -432,13 +529,15 @@ function fetchCustomersWithJSONP() {
       }
     }
 
-    window[callbackName] = (data) => {
+    window[callbackName] = (json) => {
       cleanup()
-      const customers = data?.customers || data || []
+      // Handle API response format: {status, data} or raw array
+      const customers = json.data || json || []
       resolve(customers)
     }
 
-    const url = API_CONFIG.CUSTOMERS_URL + '&callback=' + callbackName
+    const cacheBust = `_=${Date.now()}`
+    const url = `${API_CONFIG.CUSTOMERS_URL}&${cacheBust}&callback=${callbackName}`
     
     script.src = url
     script.onerror = () => {

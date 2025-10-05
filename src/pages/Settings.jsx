@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Save, Globe, Zap, TestTube, CheckCircle, XCircle } from 'lucide-react'
-import { API_CONFIG, fetchOrders } from '../config/api'
+import { Save, Globe, Zap, TestTube, CheckCircle, XCircle, Trash2, Copy } from 'lucide-react'
+import { API_CONFIG, fetchOrders, clearSampleData } from '../config/api'
 import { useToast } from '../components/Toast'
 
 /**
@@ -32,6 +32,7 @@ function Settings() {
 
   const [testResult, setTestResult] = useState(null)
   const [isTesting, setIsTesting] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
 
   const handleInputChange = (e) => {
     const { name, value } = e.target
@@ -105,6 +106,34 @@ function Settings() {
     } finally {
       setIsTesting(false)
     }
+  }
+
+  const handleClearSampleData = async () => {
+    if (!window.confirm('Are you sure you want to clear all sample data? This action cannot be undone.')) {
+      return
+    }
+    
+    setIsClearing(true)
+    
+    try {
+      const response = await clearSampleData()
+      
+      if (response.status === 'ok') {
+        showToast('Sample data cleared successfully!', 'success')
+      } else {
+        throw new Error(response.message || 'Failed to clear sample data')
+      }
+    } catch (error) {
+      console.error('Error clearing sample data:', error)
+      showToast(`Failed to clear sample data: ${error.message}`, 'error')
+    } finally {
+      setIsClearing(false)
+    }
+  }
+
+  const handleCopyUrl = () => {
+    navigator.clipboard.writeText(API_CONFIG.BASE_URL)
+    showToast('API URL copied to clipboard!', 'success', 2000)
   }
 
   return (
@@ -263,18 +292,38 @@ function Settings() {
           {/* Current Endpoints */}
           <div>
             <h3 className="text-sm font-semibold text-stone-700 mb-3">Active Endpoints</h3>
+            
+            {/* Base URL with Copy Button */}
+            <div className="p-3 bg-primary-50 border border-primary-200 rounded-lg mb-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="font-medium text-primary-700 text-sm">Apps Script Base URL:</p>
+                <button
+                  onClick={handleCopyUrl}
+                  className="text-primary-600 hover:text-primary-700 transition-colors"
+                  title="Copy to clipboard"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-stone-600 break-all font-mono text-xs">{API_CONFIG.BASE_URL}</p>
+            </div>
+            
             <div className="space-y-2 text-xs">
               <div className="p-3 bg-stone-50 rounded-lg">
                 <p className="font-medium text-stone-600 mb-1">Get Orders:</p>
-                <p className="text-stone-500 break-all font-mono">{API_CONFIG.GET_ORDERS_URL}</p>
+                <p className="text-stone-500 break-all font-mono">?action=getOrders&limit=200</p>
               </div>
               <div className="p-3 bg-stone-50 rounded-lg">
                 <p className="font-medium text-stone-600 mb-1">Update Status:</p>
-                <p className="text-stone-500 break-all font-mono">{API_CONFIG.UPDATE_STATUS_URL}</p>
+                <p className="text-stone-500 break-all font-mono">?action=update_status&order_id=...&status=...</p>
               </div>
               <div className="p-3 bg-stone-50 rounded-lg">
                 <p className="font-medium text-stone-600 mb-1">Analytics:</p>
-                <p className="text-stone-500 break-all font-mono">{API_CONFIG.ANALYTICS_URL}</p>
+                <p className="text-stone-500 break-all font-mono">?action=getAnalytics</p>
+              </div>
+              <div className="p-3 bg-stone-50 rounded-lg">
+                <p className="font-medium text-stone-600 mb-1">Customers:</p>
+                <p className="text-stone-500 break-all font-mono">?action=getCustomers</p>
               </div>
             </div>
           </div>
@@ -368,7 +417,7 @@ function Settings() {
         </div>
       </motion.div>
 
-      {/* API Testing Section */}
+      {/* API Testing & Data Management Section */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -377,21 +426,32 @@ function Settings() {
       >
         <div className="flex items-center gap-2 mb-4">
           <TestTube className="w-5 h-5 text-accent-600" />
-          <h2 className="text-xl font-semibold text-stone-900">API Testing</h2>
+          <h2 className="text-xl font-semibold text-stone-900">API Testing & Data Management</h2>
         </div>
 
         <p className="text-sm text-stone-600 mb-4">
-          Test your API connection and view the raw response data for debugging.
+          Test your API connection, view raw response data for debugging, and manage sample data.
         </p>
 
-        <button
-          onClick={handleTestFetch}
-          disabled={isTesting}
-          className="btn-primary flex items-center gap-2"
-        >
-          <TestTube className={`w-4 h-4 ${isTesting ? 'animate-pulse' : ''}`} />
-          {isTesting ? 'Testing...' : 'Test Fetch Orders'}
-        </button>
+        <div className="flex flex-wrap gap-3 mb-4">
+          <button
+            onClick={handleTestFetch}
+            disabled={isTesting}
+            className="btn-primary flex items-center gap-2"
+          >
+            <TestTube className={`w-4 h-4 ${isTesting ? 'animate-pulse' : ''}`} />
+            {isTesting ? 'Testing...' : 'Test Fetch Orders (Limit 5)'}
+          </button>
+          
+          <button
+            onClick={handleClearSampleData}
+            disabled={isClearing}
+            className="btn-ghost border border-error-300 text-error-700 hover:bg-error-50 flex items-center gap-2"
+          >
+            <Trash2 className={`w-4 h-4 ${isClearing ? 'animate-pulse' : ''}`} />
+            {isClearing ? 'Clearing...' : 'Clear Sample Data'}
+          </button>
+        </div>
 
         {/* Test Result Display */}
         {testResult && (

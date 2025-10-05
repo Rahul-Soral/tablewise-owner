@@ -4,29 +4,31 @@ import { fetchOrders, isOnline } from '../config/api'
 /**
  * useOrderPolling Hook
  * Implements efficient polling for orders with:
- * - Configurable interval (default: 3 seconds)
+ * - Configurable interval (default: 10 seconds)
  * - Pauses when tab/window is not visible (Page Visibility API)
  * - Exponential backoff on server errors
  * - Offline detection
  * - Manual refresh capability
+ * - AbortController for fetch cancellation
  * 
  * @param {function} onUpdate - Callback when orders are updated
- * @param {number} interval - Polling interval in ms - default: 3000
+ * @param {number} interval - Polling interval in ms - default: 10000
  * @param {boolean} enabled - Whether polling is enabled - default: true
  * @returns {Object} { refresh, startPolling, stopPolling, isPolling, isOffline, error }
  * 
  * @example
  * const { refresh, isOffline, error } = useOrderPolling(
  *   (orders) => setOrders(orders),
- *   3000,
+ *   10000,
  *   true
  * )
  */
-export function useOrderPolling(onUpdate, interval = 3000, enabled = true) {
+export function useOrderPolling(onUpdate, interval = 10000, enabled = true) {
   const intervalRef = useRef(null)
   const isPollingRef = useRef(false)
   const errorCountRef = useRef(0)
   const currentIntervalRef = useRef(interval)
+  const abortControllerRef = useRef(null)
   
   const [isPolling, setIsPolling] = useState(false)
   const [isOffline, setIsOffline] = useState(!isOnline())
@@ -58,11 +60,19 @@ export function useOrderPolling(onUpdate, interval = 3000, enabled = true) {
       setIsOffline(false)
     }
     
+    // Cancel previous request if still running
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    
+    // Create new AbortController for this request
+    abortControllerRef.current = new AbortController()
+    
     isPollingRef.current = true
     setIsPolling(true)
     
     try {
-      const result = await fetchOrders()
+      const result = await fetchOrders(abortControllerRef.current.signal)
       
       // Check if offline mode (cached data)
       if (result.offline) {
@@ -75,6 +85,11 @@ export function useOrderPolling(onUpdate, interval = 3000, enabled = true) {
         currentIntervalRef.current = interval // Reset interval
       }
     } catch (err) {
+      if (err.name === 'AbortError') {
+        // Request was cancelled, ignore
+        return
+      }
+      
       console.error('Polling error:', err)
       setError(err)
       errorCountRef.current++
@@ -87,6 +102,7 @@ export function useOrderPolling(onUpdate, interval = 3000, enabled = true) {
     } finally {
       isPollingRef.current = false
       setIsPolling(false)
+      abortControllerRef.current = null
     }
   }, [onUpdate, interval, getBackoffInterval])
 
@@ -106,6 +122,12 @@ export function useOrderPolling(onUpdate, interval = 3000, enabled = true) {
     if (intervalRef.current) {
       clearInterval(intervalRef.current)
       intervalRef.current = null
+    }
+    
+    // Cancel any pending fetch
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
     }
   }, [])
 
