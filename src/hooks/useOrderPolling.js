@@ -1,211 +1,165 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
-import { fetchOrders, isOnline } from '../config/api'
+import { useEffect, useRef, useState } from 'react'
 
 /**
- * useOrderPolling Hook
- * Implements efficient polling for orders with:
- * - Configurable interval (default: 10 seconds)
- * - Pauses when tab/window is not visible (Page Visibility API)
- * - Exponential backoff on server errors
- * - Offline detection
- * - Manual refresh capability
- * - AbortController for fetch cancellation
+ * Production-safe Order Polling Hook
  * 
- * @param {function} onUpdate - Callback when orders are updated
- * @param {number} interval - Polling interval in ms - default: 10000
- * @param {boolean} enabled - Whether polling is enabled - default: true
- * @returns {Object} { refresh, startPolling, stopPolling, isPolling, isOffline, error }
+ * Features:
+ * - Polls API every 5 seconds (configurable)
+ * - Prevents concurrent fetches
+ * - Proper cleanup on unmount
+ * - Single interval, no overlaps
+ * - Handles errors gracefully
  * 
- * @example
- * const { refresh, isOffline, error } = useOrderPolling(
- *   (orders) => setOrders(orders),
- *   10000,
- *   true
- * )
+ * @param {number} interval - Polling interval in ms (default: 5000)
+ * @returns {Object} { orders, isLoading, error, lastUpdated, refetch }
  */
-export function useOrderPolling(onUpdate, interval = 10000, enabled = true) {
-  const intervalRef = useRef(null)
-  const isPollingRef = useRef(false)
-  const errorCountRef = useRef(0)
-  const currentIntervalRef = useRef(interval)
-  const abortControllerRef = useRef(null)
-  
-  const [isPolling, setIsPolling] = useState(false)
-  const [isOffline, setIsOffline] = useState(!isOnline())
+export function useOrderPolling(interval = 5000) {
+  const [orders, setOrders] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
+  
+  const isFetchingRef = useRef(false)
+  const intervalIdRef = useRef(null)
+  const abortControllerRef = useRef(null)
 
-  // Calculate backoff interval based on error count
-  const getBackoffInterval = useCallback(() => {
-    const maxBackoff = 30000 // Max 30 seconds
-    const backoff = Math.min(
-      interval * Math.pow(2, errorCountRef.current),
-      maxBackoff
-    )
-    return backoff
-  }, [interval])
+  // Fetch orders from API
+  const fetchOrdersData = async () => {
+    // Prevent concurrent fetches
+    if (isFetchingRef.current) {
+      console.log('Fetch already in progress, skipping...')
+      return
+    }
 
-  const poll = useCallback(async () => {
-    if (isPollingRef.current) return // Prevent concurrent polls
-    
-    // Don't poll if document is hidden
+    // Don't fetch if tab is hidden
     if (document.hidden) {
       return
     }
 
-    // Check online status
-    if (!isOnline()) {
-      setIsOffline(true)
-      return
-    } else {
-      setIsOffline(false)
-    }
+    isFetchingRef.current = true
     
-    // Cancel previous request if still running
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-    }
-    
-    // Create new AbortController for this request
-    abortControllerRef.current = new AbortController()
-    
-    isPollingRef.current = true
-    setIsPolling(true)
-    
+    // Create abort controller for this request
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     try {
-      const result = await fetchOrders(abortControllerRef.current.signal)
+      const cacheBust = Date.now()
+      const url = `https://script.google.com/macros/s/AKfycbzgFdV0CRvZau4rTwxqITSoyV9WsI1I9P0ErYXg10B2ljrWHqAHXQ5SXGDJRVj8pZo/exec?action=getOrders&limit=200&_=${cacheBust}`
       
-      // Check if offline mode (cached data)
-      if (result.offline) {
-        setIsOffline(true)
-        onUpdate(result.orders)
-      } else {
-        onUpdate(result)
-        setError(null)
-        errorCountRef.current = 0 // Reset error count on success
-        currentIntervalRef.current = interval // Reset interval
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' }
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
       }
+
+      const json = await response.json()
+      
+      // Handle API response format: {status, data} or raw array
+      const ordersData = json.data || json || []
+      
+      setOrders(ordersData)
+      setError(null)
+      setLastUpdated(new Date())
+      setIsLoading(false)
+      
+      // Cache in localStorage
+      try {
+        localStorage.setItem('orders_snapshot_v1', JSON.stringify(ordersData))
+        localStorage.setItem('orders_snapshot_v1_timestamp', Date.now().toString())
+      } catch (e) {
+        console.warn('Failed to cache orders:', e)
+      }
+      
     } catch (err) {
       if (err.name === 'AbortError') {
-        // Request was cancelled, ignore
+        console.log('Fetch aborted')
         return
       }
       
-      console.error('Polling error:', err)
-      setError(err)
-      errorCountRef.current++
+      console.error('Error fetching orders:', err)
+      setError(err.message)
+      setIsLoading(false)
       
-      // Implement exponential backoff
-      const newInterval = getBackoffInterval()
-      currentIntervalRef.current = newInterval
-      
-      console.warn(`Polling failed. Retrying in ${newInterval / 1000}s...`)
+      // Try to load from cache
+      try {
+        const cached = localStorage.getItem('orders_snapshot_v1')
+        if (cached) {
+          setOrders(JSON.parse(cached))
+        }
+      } catch (e) {
+        console.warn('Failed to load cached orders:', e)
+      }
     } finally {
-      isPollingRef.current = false
-      setIsPolling(false)
+      isFetchingRef.current = false
       abortControllerRef.current = null
     }
-  }, [onUpdate, interval, getBackoffInterval])
+  }
 
-  const startPolling = useCallback(() => {
-    if (intervalRef.current) return
+  // Manual refetch function
+  const refetch = () => {
+    fetchOrdersData()
+  }
 
-    // Initial fetch
-    poll()
-
-    // Set up interval
-    intervalRef.current = setInterval(() => {
-      poll()
-    }, currentIntervalRef.current)
-  }, [poll])
-
-  const stopPolling = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
+  // Set up polling
+  useEffect(() => {
+    console.log(`Starting order polling (every ${interval / 1000}s)`)
     
-    // Cancel any pending fetch
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
+    // Initial fetch
+    fetchOrdersData()
+
+    // Set up interval - only ONE interval
+    intervalIdRef.current = setInterval(() => {
+      fetchOrdersData()
+    }, interval)
+
+    // Cleanup function - CRITICAL
+    return () => {
+      console.log('Cleaning up order polling')
+      
+      // Clear interval
+      if (intervalIdRef.current) {
+        clearInterval(intervalIdRef.current)
+        intervalIdRef.current = null
+      }
+      
+      // Abort any pending fetch
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
+      
+      isFetchingRef.current = false
     }
-  }, [])
+  }, [interval]) // Only re-run if interval changes
 
-  const refresh = useCallback(() => {
-    // Reset error count on manual refresh
-    errorCountRef.current = 0
-    currentIntervalRef.current = interval
-    poll()
-  }, [poll, interval])
-
-  // Handle page visibility changes
+  // Handle visibility changes (pause when hidden)
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (!enabled) return
-
       if (document.hidden) {
-        // Pause polling when tab is hidden
         console.log('Tab hidden - pausing polling')
-        stopPolling()
+        if (intervalIdRef.current) {
+          clearInterval(intervalIdRef.current)
+          intervalIdRef.current = null
+        }
       } else {
-        // Resume polling when tab becomes visible
         console.log('Tab visible - resuming polling')
-        errorCountRef.current = 0 // Reset errors when tab becomes visible
-        currentIntervalRef.current = interval
-        startPolling()
+        fetchOrdersData()
+        if (!intervalIdRef.current) {
+          intervalIdRef.current = setInterval(fetchOrdersData, interval)
+        }
       }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [enabled, startPolling, stopPolling, interval])
+  }, [interval])
 
-  // Handle online/offline events
-  useEffect(() => {
-    const handleOnline = () => {
-      console.log('Network back online')
-      setIsOffline(false)
-      errorCountRef.current = 0
-      if (enabled && !document.hidden) {
-        refresh()
-      }
-    }
-
-    const handleOffline = () => {
-      console.log('Network offline')
-      setIsOffline(true)
-    }
-
-    window.addEventListener('online', handleOnline)
-    window.addEventListener('offline', handleOffline)
-
-    return () => {
-      window.removeEventListener('online', handleOnline)
-      window.removeEventListener('offline', handleOffline)
-    }
-  }, [enabled, refresh])
-
-  // Main polling effect
-  useEffect(() => {
-    if (enabled && !document.hidden) {
-      startPolling()
-    } else {
-      stopPolling()
-    }
-
-    return () => stopPolling()
-  }, [enabled, startPolling, stopPolling])
-
-  // Update interval when it changes
-  useEffect(() => {
-    if (intervalRef.current) {
-      stopPolling()
-      startPolling()
-    }
-  }, [interval, startPolling, stopPolling])
-
-  return { refresh, startPolling, stopPolling, isPolling, isOffline, error }
+  return { orders, isLoading, error, lastUpdated, refetch }
 }
 

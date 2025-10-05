@@ -18,11 +18,25 @@ import { useTimer, getTimerColor } from '../hooks/useTimer'
  */
 function OrderCard({ order, onStatusChange, onClick, isNew }) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const elapsed = useTimer(order.createdAt)
-  const timerColor = getTimerColor(order.createdAt)
+  const orderTime = order.timestamp || order.createdAt
+  const elapsed = useTimer(orderTime)
+  const timerColor = getTimerColor(orderTime)
+  
+  // Extract fields with fallbacks
+  const orderId = order.order_id || order.id
+  const customerName = order.customer?.name || order.customerName || 'Unknown Customer'
+  const customerMobile = order.customer?.mobile || order.customerPhone || ''
+  const orderTotal = order.total || 0
+  const orderStatus = (order.status || 'NEW').toLowerCase()
+  const orderItems = order.items || []
 
   // Status configuration
   const statusConfig = {
+    new: { 
+      label: 'New', 
+      color: 'bg-warning-100 text-warning-700 border-warning-200',
+      actions: ['accept', 'cancel']
+    },
     pending: { 
       label: 'Pending', 
       color: 'bg-warning-100 text-warning-700 border-warning-200',
@@ -55,11 +69,11 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
     },
   }
 
-  const currentStatus = statusConfig[order.status] || statusConfig.pending
+  const currentStatus = statusConfig[orderStatus] || statusConfig.pending
 
   const handleStatusChange = (e, newStatus) => {
     e.stopPropagation() // Prevent card click
-    onStatusChange(order.id, newStatus)
+    onStatusChange(orderId, newStatus)
   }
 
   const handleCardClick = () => {
@@ -87,7 +101,7 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="article"
-      aria-label={`Order ${order.id} for ${order.customerName}`}
+      aria-label={`Order ${orderId} for ${customerName}`}
       data-testid="order-card"
     >
       {/* New order pulse indicator */}
@@ -113,7 +127,7 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
             {/* Order ID and Table */}
             <div className="flex items-center gap-3 mb-2">
               <h3 className="text-lg font-bold text-stone-900">
-                #{order.id}
+                #{orderId}
               </h3>
               {order.table && (
                 <span className="px-2.5 py-1 bg-stone-100 text-stone-700 text-xs font-semibold rounded-md">
@@ -126,9 +140,15 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
             <div className="flex items-center gap-2 text-stone-600">
               <User className="w-4 h-4" />
               <span className="text-sm font-medium" data-testid="customer-name">
-                {order.customerName}
+                {customerName}
               </span>
             </div>
+            {customerMobile && (
+              <div className="flex items-center gap-2 text-stone-600 mt-1">
+                <Phone className="w-3.5 h-3.5" />
+                <span className="text-xs">{customerMobile}</span>
+              </div>
+            )}
           </div>
 
           {/* Status Badge */}
@@ -157,11 +177,11 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
             }}
             className="flex items-center gap-2 text-sm text-stone-700 hover:text-stone-900 transition-colors w-full"
             aria-expanded={isExpanded}
-            aria-controls={`order-items-${order.id}`}
+            aria-controls={`order-items-${orderId}`}
           >
             <Package className="w-4 h-4" />
             <span className="font-medium">
-              {order.items.length} item{order.items.length !== 1 ? 's' : ''}
+              {orderItems.length} item{orderItems.length !== 1 ? 's' : ''}
             </span>
             {isExpanded ? (
               <ChevronUp className="w-4 h-4 ml-auto" />
@@ -174,7 +194,7 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
           <AnimatePresence>
             {isExpanded && (
               <motion.div
-                id={`order-items-${order.id}`}
+                id={`order-items-${orderId}`}
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
@@ -182,33 +202,39 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
                 className="overflow-hidden"
               >
                 <ul className="mt-3 space-y-2 pl-6">
-                  {order.items.map((item, index) => (
-                    <li key={index} className="text-sm text-stone-600">
-                      <span className="font-medium">{item.quantity}x</span> {item.name}
-                      {item.modifiers && item.modifiers.length > 0 && (
-                        <span className="text-xs text-stone-500 ml-1">
-                          ({item.modifiers.join(', ')})
-                        </span>
-                      )}
-                    </li>
-                  ))}
+                  {orderItems.map((item, index) => {
+                    const qty = item.quantity || item.qty || 1
+                    return (
+                      <li key={index} className="text-sm text-stone-600">
+                        <span className="font-medium">{qty}x</span> {item.name || 'Item'}
+                        {item.notes && (
+                          <span className="text-xs text-stone-500 ml-1">
+                            ({item.notes})
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        {/* Total and Margin */}
+        {/* Order Amount / Total */}
         <div className="flex items-center justify-between mb-4 pb-4 border-b border-stone-200">
-          <div className="flex items-center gap-2">
-            <DollarSign className="w-4 h-4 text-stone-500" />
-            <span className="text-lg font-bold text-stone-900" data-testid="total-amount">
-              ${order.total.toFixed(2)}
-            </span>
+          <div className="flex flex-col">
+            <span className="text-xs text-stone-500 mb-0.5">Order Amount</span>
+            <div className="flex items-center gap-2">
+              <DollarSign className="w-4 h-4 text-stone-600" />
+              <span className="text-lg font-bold text-stone-900" data-testid="total-amount">
+                ${Number(orderTotal).toFixed(2)}
+              </span>
+            </div>
           </div>
           {order.margin && (
             <span className="text-xs text-success-600 font-semibold">
-              Margin: ${order.margin.toFixed(2)}
+              Margin: ${Number(order.margin).toFixed(2)}
             </span>
           )}
         </div>
@@ -266,14 +292,14 @@ function OrderCard({ order, onStatusChange, onClick, isNew }) {
         )}
 
         {/* Contact Button - Always visible */}
-        {order.customerPhone && (
+        {customerMobile && (
           <button
             onClick={(e) => {
               e.stopPropagation()
-              window.location.href = `tel:${order.customerPhone}`
+              window.location.href = `tel:${customerMobile}`
             }}
             className="mt-3 w-full btn-ghost text-sm flex items-center justify-center gap-2"
-            aria-label={`Call ${order.customerName}`}
+            aria-label={`Call ${customerName}`}
           >
             <Phone className="w-4 h-4" />
             <span>Call Customer</span>

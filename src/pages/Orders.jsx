@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Search, 
@@ -24,7 +24,7 @@ import ConfirmDialog from '../components/ConfirmDialog'
  * Polls GET_ORDERS_URL every 3 seconds when tab is visible
  */
 function Orders() {
-  const { orders, setOrders, updateOrderStatus: updateStoreStatus } = useStore()
+  const { updateOrderStatus: updateStoreStatus } = useStore()
   const { showToast } = useToast()
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -33,87 +33,90 @@ function Orders() {
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, orderId: null, newStatus: null })
   const [newOrderIds, setNewOrderIds] = useState(new Set())
-  const [lastUpdated, setLastUpdated] = useState(null)
 
-  // Real-time polling (every 10 seconds, pauses when tab hidden)
-  const handleOrdersUpdate = useCallback((newOrders) => {
-    // Update last updated timestamp
-    setLastUpdated(new Date())
+  // Production-safe polling (every 5 seconds)
+  const { orders, isLoading, error, lastUpdated, refetch } = useOrderPolling(5000)
 
-    // Handle offline mode response
-    if (newOrders.offline) {
-      showToast('You are offline. Showing cached data.', 'warning', 5000)
-      setOrders(newOrders.orders)
-      return
-    }
-
-    // Detect new orders for animation
-    const currentIds = new Set(orders.map(o => o.id))
+  // Detect new orders for animation
+  const prevOrderIdsRef = useRef(new Set())
+  
+  useEffect(() => {
+    if (!orders || orders.length === 0) return
+    
+    const currentIds = new Set(orders.map(o => o.order_id || o.id))
     const newIds = new Set()
     
-    const ordersArray = Array.isArray(newOrders) ? newOrders : newOrders.orders || []
-    
-    ordersArray.forEach(order => {
-      if (!currentIds.has(order.id)) {
-        newIds.add(order.id)
+    currentIds.forEach(id => {
+      if (!prevOrderIdsRef.current.has(id)) {
+        newIds.add(id)
       }
     })
     
     if (newIds.size > 0) {
       setNewOrderIds(newIds)
-      // Clear new order indicators after 5 seconds
       setTimeout(() => setNewOrderIds(new Set()), 5000)
     }
     
-    setOrders(ordersArray)
-  }, [orders, setOrders, showToast])
-
-  const { refresh, isOffline, error } = useOrderPolling(
-    handleOrdersUpdate, 
-    API_CONFIG.ORDERS_POLLING_INTERVAL, // 10 seconds
-    true
-  )
+    prevOrderIdsRef.current = currentIds
+  }, [orders])
 
   // Filter and sort orders
   const filteredOrders = useMemo(() => {
+    if (!orders || !Array.isArray(orders)) return []
+    
     let filtered = [...orders]
 
     // Search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(order =>
-        order.id.toLowerCase().includes(query) ||
-        order.customerName.toLowerCase().includes(query) ||
-        order.customerPhone?.includes(query)
-      )
+      filtered = filtered.filter(order => {
+        const orderId = order.order_id || order.id || ''
+        const customerName = order.customer?.name || order.customerName || ''
+        const customerMobile = order.customer?.mobile || order.customerPhone || ''
+        
+        return (
+          orderId.toLowerCase().includes(query) ||
+          customerName.toLowerCase().includes(query) ||
+          customerMobile.includes(query)
+        )
+      })
     }
 
     // Status filter
     if (statusFilter !== 'all') {
-      filtered = filtered.filter(order => order.status === statusFilter)
+      filtered = filtered.filter(order => {
+        const status = (order.status || '').toUpperCase()
+        return status === statusFilter.toUpperCase()
+      })
     }
 
     // Time filter
     const now = new Date()
     if (timeFilter === 'today') {
       const startOfDay = new Date(now.setHours(0, 0, 0, 0))
-      filtered = filtered.filter(order => new Date(order.createdAt) >= startOfDay)
+      filtered = filtered.filter(order => {
+        const orderDate = new Date(order.timestamp || order.createdAt)
+        return orderDate >= startOfDay
+      })
     } else if (timeFilter === '24h') {
       const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      filtered = filtered.filter(order => new Date(order.createdAt) >= last24h)
+      filtered = filtered.filter(order => {
+        const orderDate = new Date(order.timestamp || order.createdAt)
+        return orderDate >= last24h
+      })
     }
 
     // Sort
     filtered.sort((a, b) => {
-      const dateA = new Date(a.createdAt)
-      const dateB = new Date(b.createdAt)
+      const dateA = new Date(a.timestamp || a.createdAt || 0)
+      const dateB = new Date(b.timestamp || b.createdAt || 0)
       return sortBy === 'newest' ? dateB - dateA : dateA - dateB
     })
 
     return filtered
   }, [orders, searchQuery, statusFilter, sortBy, timeFilter])
 
-  // Handle status change with optimistic update
+  // Handle status change with API call and refetch
   const handleStatusChange = useCallback(async (orderId, newStatus) => {
     // Show confirmation dialog for cancel action
     if (newStatus === 'cancelled') {
@@ -121,52 +124,37 @@ function Orders() {
       return
     }
 
-    // Find order to get old status
-    const order = orders.find(o => o.id === orderId)
-    if (!order) return
-    
-    const oldStatus = order.status
-
-    // Step 1: Optimistic update - UI changes immediately
-    updateStoreStatus(orderId, newStatus)
-
     try {
-      // Step 2: Call API
+      // Call API to update status
       await updateOrderStatus(orderId, newStatus)
       
       // Success toast
       showToast(`Order ${orderId} updated to ${newStatus}`, 'success', 3000)
+      
+      // Refetch orders immediately
+      refetch()
     } catch (error) {
       console.error('Failed to update order status:', error)
-      
-      // Step 3: Rollback on error
-      updateStoreStatus(orderId, oldStatus)
       
       // Error toast
       const errorMsg = error.response?.data?.message || error.message || 'Failed to update order'
       showToast(errorMsg, 'error', 5000)
     }
-  }, [orders, updateStoreStatus, showToast])
+  }, [showToast, refetch])
 
   const handleConfirmCancel = async () => {
     const { orderId, newStatus } = confirmDialog
-    
-    const order = orders.find(o => o.id === orderId)
-    if (!order) return
-    
-    const oldStatus = order.status
-
-    // Optimistic update
-    updateStoreStatus(orderId, newStatus)
 
     try {
       await updateOrderStatus(orderId, newStatus)
       showToast(`Order ${orderId} cancelled`, 'success', 3000)
+      refetch()
     } catch (error) {
       console.error('Failed to cancel order:', error)
-      updateStoreStatus(orderId, oldStatus)
       showToast('Failed to cancel order. Please try again.', 'error', 5000)
     }
+    
+    setConfirmDialog({ isOpen: false, orderId: null, newStatus: null })
   }
 
   const handleOrderClick = (order) => {
@@ -179,16 +167,16 @@ function Orders() {
 
   return (
     <div className="space-y-6">
-      {/* Offline Indicator */}
-      {isOffline && (
+      {/* Error Indicator */}
+      {error && (
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-warning-50 border border-warning-200 text-warning-800 px-4 py-3 rounded-lg flex items-center gap-2"
-          data-testid="offline-indicator"
+          className="bg-error-50 border border-error-200 text-error-800 px-4 py-3 rounded-lg flex items-center gap-2"
+          data-testid="error-indicator"
         >
           <WifiOff className="w-5 h-5" />
-          <span className="font-medium">You are offline. Showing cached data.</span>
+          <span className="font-medium">Error loading orders: {error}. Retrying...</span>
         </motion.div>
       )}
 
@@ -219,11 +207,12 @@ function Orders() {
         </div>
 
         <button
-          onClick={refresh}
+          onClick={refetch}
+          disabled={isLoading}
           className="btn-ghost flex items-center gap-2"
           aria-label="Refresh orders"
         >
-          <RefreshCw className="w-4 h-4" />
+          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           <span className="hidden sm:inline">Refresh</span>
         </button>
       </motion.div>
@@ -300,35 +289,51 @@ function Orders() {
       </motion.div>
 
       {/* Orders Grid */}
-      <AnimatePresence mode="popLayout">
-        {filteredOrders.length > 0 ? (
-          <motion.div
-            layout
-            className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6"
-          >
-            {filteredOrders.map((order, index) => (
-              <OrderCard
-                key={order.id}
-                order={order}
-                onStatusChange={handleStatusChange}
-                onClick={handleOrderClick}
-                isNew={newOrderIds.has(order.id)}
-              />
-            ))}
-          </motion.div>
-        ) : (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="card-elevated p-12 text-center"
-          >
-            <p className="text-stone-600 text-lg">No orders found</p>
-            <p className="text-stone-500 text-sm mt-2">
-              Try adjusting your filters or search query
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {isLoading && orders.length === 0 ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="card-elevated p-12 text-center"
+        >
+          <RefreshCw className="w-12 h-12 text-primary-600 mx-auto mb-4 animate-spin" />
+          <p className="text-stone-600 text-lg">Loading orders...</p>
+        </motion.div>
+      ) : (
+        <AnimatePresence mode="popLayout">
+          {filteredOrders.length > 0 ? (
+            <motion.div
+              layout
+              className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6"
+            >
+              {filteredOrders.map((order) => {
+                const orderId = order.order_id || order.id
+                return (
+                  <OrderCard
+                    key={orderId}
+                    order={order}
+                    onStatusChange={handleStatusChange}
+                    onClick={handleOrderClick}
+                    isNew={newOrderIds.has(orderId)}
+                  />
+                )
+              })}
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="card-elevated p-12 text-center"
+            >
+              <p className="text-stone-600 text-lg">No orders yet</p>
+              <p className="text-stone-500 text-sm mt-2">
+                {searchQuery || statusFilter !== 'all' 
+                  ? 'Try adjusting your filters or search query'
+                  : 'New orders will appear here automatically'}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
 
       {/* Order Detail Slide-over */}
       <OrderDetail
