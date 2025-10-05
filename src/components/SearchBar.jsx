@@ -51,3 +51,4 @@ function SearchBar({ value, onChange, placeholder = 'Search...', onClear, classN
 export default SearchBar
 
 
+

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Save, Globe, Zap } from 'lucide-react'
-import { API_CONFIG } from '../config/api'
+import { Save, Globe, Zap, TestTube, CheckCircle, XCircle } from 'lucide-react'
+import { API_CONFIG, fetchOrders } from '../config/api'
 import { useToast } from '../components/Toast'
 
 /**
@@ -26,9 +26,12 @@ function Settings() {
     api: {
       useProxy: API_CONFIG.USE_PROXY,
       proxyUrl: API_CONFIG.PROXY_URL || '',
-      pollingInterval: API_CONFIG.POLLING_INTERVAL,
+      pollingInterval: API_CONFIG.ORDERS_POLLING_INTERVAL,
     }
   })
+
+  const [testResult, setTestResult] = useState(null)
+  const [isTesting, setIsTesting] = useState(false)
 
   const handleInputChange = (e) => {
     const { name, value } = e.target
@@ -73,6 +76,35 @@ function Settings() {
     localStorage.setItem('api_polling_interval', settings.api.pollingInterval)
     
     showToast('API settings saved! Please reload the page for changes to take effect.', 'success', 7000)
+  }
+
+  const handleTestFetch = async () => {
+    setIsTesting(true)
+    setTestResult(null)
+    
+    try {
+      const startTime = Date.now()
+      const response = await fetchOrders()
+      const endTime = Date.now()
+      const duration = endTime - startTime
+      
+      setTestResult({
+        success: true,
+        data: response,
+        duration,
+        message: `Successfully fetched ${Array.isArray(response) ? response.length : 0} orders in ${duration}ms`
+      })
+      showToast('Test fetch successful!', 'success')
+    } catch (error) {
+      setTestResult({
+        success: false,
+        error: error.message,
+        message: `Test fetch failed: ${error.message}`
+      })
+      showToast('Test fetch failed', 'error')
+    } finally {
+      setIsTesting(false)
+    }
   }
 
   return (
@@ -334,6 +366,86 @@ function Settings() {
             or enabling the proxy toggle above.
           </p>
         </div>
+      </motion.div>
+
+      {/* API Testing Section */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+        className="card-elevated p-6"
+      >
+        <div className="flex items-center gap-2 mb-4">
+          <TestTube className="w-5 h-5 text-accent-600" />
+          <h2 className="text-xl font-semibold text-stone-900">API Testing</h2>
+        </div>
+
+        <p className="text-sm text-stone-600 mb-4">
+          Test your API connection and view the raw response data for debugging.
+        </p>
+
+        <button
+          onClick={handleTestFetch}
+          disabled={isTesting}
+          className="btn-primary flex items-center gap-2"
+        >
+          <TestTube className={`w-4 h-4 ${isTesting ? 'animate-pulse' : ''}`} />
+          {isTesting ? 'Testing...' : 'Test Fetch Orders'}
+        </button>
+
+        {/* Test Result Display */}
+        {testResult && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`mt-4 p-4 rounded-lg border ${
+              testResult.success
+                ? 'bg-success-50 border-success-200'
+                : 'bg-error-50 border-error-200'
+            }`}
+          >
+            <div className="flex items-start gap-2 mb-2">
+              {testResult.success ? (
+                <CheckCircle className="w-5 h-5 text-success-600 flex-shrink-0 mt-0.5" />
+              ) : (
+                <XCircle className="w-5 h-5 text-error-600 flex-shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <p className={`font-medium text-sm ${
+                  testResult.success ? 'text-success-900' : 'text-error-900'
+                }`}>
+                  {testResult.message}
+                </p>
+                
+                {testResult.success && testResult.data && (
+                  <div className="mt-3">
+                    <p className="text-xs font-semibold text-stone-700 mb-2">
+                      Raw Response Data (first 5 orders):
+                    </p>
+                    <pre className="bg-stone-900 text-green-400 p-3 rounded text-xs overflow-x-auto max-h-96 overflow-y-auto">
+                      {JSON.stringify(
+                        Array.isArray(testResult.data) 
+                          ? testResult.data.slice(0, 5)
+                          : testResult.data,
+                        null,
+                        2
+                      )}
+                    </pre>
+                  </div>
+                )}
+
+                {!testResult.success && testResult.error && (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold text-error-700 mb-1">Error Details:</p>
+                    <p className="text-xs text-error-600 font-mono bg-error-100 p-2 rounded">
+                      {testResult.error}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
       </motion.div>
 
       {/* Save Button */}

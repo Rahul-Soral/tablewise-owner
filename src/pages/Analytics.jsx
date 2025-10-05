@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { 
   DollarSign, 
@@ -6,11 +6,14 @@ import {
   TrendingUp, 
   Users,
   Download,
-  Clock
+  Clock,
+  RefreshCw
 } from 'lucide-react'
 import useStore from '../store/useStore'
+import { getAnalytics, API_CONFIG } from '../config/api'
 import { getAnalyticsSummary } from '../utils/insights'
 import { exportOrdersToCSV, exportCustomersToCSV, exportAnalyticsToCSV } from '../utils/export'
+import { useToast } from '../components/Toast'
 import MetricCard from '../components/MetricCard'
 import ActionCard from '../components/ActionCard'
 import TopItemsChart from '../components/TopItemsChart'
@@ -19,15 +22,69 @@ import HourlyChart from '../components/HourlyChart'
 /**
  * Analytics Page
  * Comprehensive analytics dashboard with metrics, charts, and insights
+ * Fetches from live API every 30 seconds
  */
 function Analytics() {
   const { orders } = useStore()
+  const { showToast } = useToast()
   const [timePeriod, setTimePeriod] = useState('day')
+  const [analyticsData, setAnalyticsData] = useState(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [lastUpdated, setLastUpdated] = useState(null)
 
-  // Compute analytics summary
+  // Fetch analytics from API
+  const fetchAnalyticsData = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      const data = await getAnalytics()
+      setAnalyticsData(data)
+      setLastUpdated(new Date())
+      setIsLoading(false)
+    } catch (error) {
+      console.error('Error fetching analytics:', error)
+      showToast('Failed to fetch analytics data', 'error')
+      setIsLoading(false)
+      // Fallback to client-side computation
+      const fallbackData = getAnalyticsSummary(orders, timePeriod)
+      setAnalyticsData(fallbackData)
+    }
+  }, [orders, timePeriod, showToast])
+
+  // Initial fetch
+  useEffect(() => {
+    fetchAnalyticsData()
+  }, [fetchAnalyticsData])
+
+  // Poll analytics every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchAnalyticsData()
+    }, API_CONFIG.ANALYTICS_POLLING_INTERVAL)
+
+    return () => clearInterval(interval)
+  }, [fetchAnalyticsData])
+
+  // Compute analytics summary (fallback or client-side computation)
   const summary = useMemo(() => {
+    if (analyticsData) {
+      // Transform API data to match expected format
+      return {
+        revenue: analyticsData.total_revenue || 0,
+        ordersCount: analyticsData.total_orders || 0,
+        averageTicket: analyticsData.avg_ticket || 0,
+        topItems: analyticsData.top_items || [],
+        repeatCustomerRate: analyticsData.repeat_customer_rate || 0,
+        hourlyDistribution: analyticsData.hourly_distribution || Array.from({ length: 24 }, (_, i) => ({ hour: i, count: 0 })),
+        actionCard: analyticsData.action_card || { 
+          title: 'No insights available', 
+          description: 'Waiting for more data...',
+          priority: 'low'
+        }
+      }
+    }
+    // Fallback to client-side computation
     return getAnalyticsSummary(orders, timePeriod)
-  }, [orders, timePeriod])
+  }, [analyticsData, orders, timePeriod])
 
   const handleExportOrders = () => {
     exportOrdersToCSV(orders)
@@ -51,11 +108,30 @@ function Analytics() {
       >
         <div>
           <h1 className="text-3xl font-bold text-stone-900">Analytics</h1>
-          <p className="text-stone-600 mt-1">Track your business performance and insights</p>
+          <div className="flex items-center gap-3 mt-1">
+            <p className="text-stone-600">Track your business performance and insights</p>
+            {lastUpdated && (
+              <>
+                <span className="text-stone-400">•</span>
+                <div className="flex items-center gap-1.5 text-stone-500 text-sm">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Updated: {lastUpdated.toLocaleTimeString()}</span>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Export Buttons */}
         <div className="flex flex-wrap gap-2">
+          <button
+            onClick={fetchAnalyticsData}
+            className="btn-ghost text-sm flex items-center gap-2"
+            disabled={isLoading}
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
           <button
             onClick={handleExportAnalytics}
             className="btn-ghost text-sm flex items-center gap-2"

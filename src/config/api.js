@@ -3,28 +3,36 @@ import axios from 'axios'
 /**
  * API Configuration
  * Centralized API setup with axios instance
- * Uses environment variables for all endpoint URLs
+ * Google Apps Script Web App Endpoint
  * 
- * Security Best Practices:
- * 1. All API URLs stored in environment variables
- * 2. Secret token should be added to requests (set in localStorage after login)
- * 3. Implement CORS on server-side to only allow your domain
- * 4. Use HTTPS in production
- * 5. Implement rate limiting on server-side
- * 6. Validate and sanitize all inputs server-side
- * 7. Never expose API keys/secrets in client code
+ * Live API Endpoint:
+ * https://script.google.com/macros/s/AKfycbzgFdV0CRvZau4rTwxqITSoyV9WsI1I9P0ErYXg10B2ljrWHqAHXQ5SXGDJRVj8pZo/exec
+ * 
+ * Available Actions:
+ * - getOrders: ?action=getOrders&limit=100
+ * - getAnalytics: ?action=getAnalytics
+ * - getCustomers: ?action=getCustomers
+ * - update_status: ?action=update_status&order_id=...&status=...
+ * - getOrder: ?action=getOrder&order_id=...
+ * - ping: ?action=ping
  */
 
-// Get environment variables
+// Google Apps Script endpoint (single endpoint for all actions)
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzgFdV0CRvZau4rTwxqITSoyV9WsI1I9P0ErYXg10B2ljrWHqAHXQ5SXGDJRVj8pZo/exec'
+
+// Get environment variables (fallback to Apps Script URL if not set)
 const USE_PROXY = import.meta.env.VITE_USE_PROXY === 'true'
 const PROXY_URL = import.meta.env.VITE_PROXY_URL
 
 const API_CONFIG = {
-  GET_ORDERS_URL: import.meta.env.VITE_GET_ORDERS_URL,
-  UPDATE_STATUS_URL: import.meta.env.VITE_UPDATE_STATUS_URL,
-  WEBHOOK_URL: import.meta.env.VITE_WEBHOOK_URL,
-  ANALYTICS_URL: import.meta.env.VITE_ANALYTICS_URL,
-  POLLING_INTERVAL: parseInt(import.meta.env.VITE_POLLING_INTERVAL) || 3000,
+  // All actions use the same base URL with different query parameters
+  BASE_URL: APPS_SCRIPT_URL,
+  GET_ORDERS_URL: `${APPS_SCRIPT_URL}?action=getOrders&limit=100`,
+  UPDATE_STATUS_URL: APPS_SCRIPT_URL, // POST or GET with query params
+  ANALYTICS_URL: `${APPS_SCRIPT_URL}?action=getAnalytics`,
+  CUSTOMERS_URL: `${APPS_SCRIPT_URL}?action=getCustomers`,
+  ORDERS_POLLING_INTERVAL: 10000, // 10 seconds for orders
+  ANALYTICS_POLLING_INTERVAL: 30000, // 30 seconds for analytics
   USE_PROXY,
   PROXY_URL,
 }
@@ -187,14 +195,9 @@ export const fetchOrders = async () => {
       return { orders: cached, offline: true }
     }
     
-    // Fallback to mock data in development
-    if (import.meta.env.DEV) {
-      console.warn('Using mock data (development mode)')
-      const { mockOrders } = await import('./mockData')
-      return mockOrders
-    }
-    
-    throw error
+    // Return empty array if no cached data available
+    console.warn('No cached data available, returning empty array')
+    return []
   }
 }
 
@@ -240,14 +243,14 @@ function fetchOrdersWithJSONP() {
 }
 
 /**
- * Update order status with retry logic
+ * Update order status with POST first, then GET/JSONP fallback
  * Apps Script expects: { action: "update_status", order_id: "...", status: "..." }
  * @param {string} orderId - Order ID
  * @param {string} status - New status
- * @param {number} retries - Number of retries - default: 2
  * @returns {Promise<Object>} API response
  */
-export const updateOrderStatus = async (orderId, status, retries = 2) => {
+export const updateOrderStatus = async (orderId, status) => {
+  // Try POST first
   try {
     const url = getProxiedUrl(API_CONFIG.UPDATE_STATUS_URL)
     
@@ -259,56 +262,116 @@ export const updateOrderStatus = async (orderId, status, retries = 2) => {
     })
     
     return response.data
-  } catch (error) {
-    console.error(`Error updating order status (retries left: ${retries}):`, error)
+  } catch (postError) {
+    console.warn('POST request failed, attempting GET/JSONP fallback...', postError)
     
-    // Retry on network errors or 5xx errors
-    if (retries > 0 && (!error.response || error.response.status >= 500)) {
-      // Wait before retry (exponential backoff)
-      const delay = (3 - retries) * 1000
-      await new Promise(resolve => setTimeout(resolve, delay))
-      return updateOrderStatus(orderId, status, retries - 1)
+    // Fallback to GET with query parameters
+    try {
+      const getUrl = `${API_CONFIG.UPDATE_STATUS_URL}?action=update_status&order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(status)}`
+      const proxiedUrl = getProxiedUrl(getUrl)
+      
+      const response = await apiClient.get(proxiedUrl)
+      return response.data
+    } catch (getError) {
+      console.warn('GET request failed, attempting JSONP fallback...', getError)
+      
+      // Final fallback to JSONP
+      return await updateOrderStatusWithJSONP(orderId, status)
     }
-    
-    throw error
   }
 }
 
 /**
- * Get analytics data from Apps Script endpoint
- * Falls back to client-side computation if endpoint fails
- * @param {Array} orders - Orders array for fallback
- * @returns {Object} Analytics summary
+ * JSONP fallback for order status update
  */
-export const getAnalytics = async (orders) => {
-  try {
-    // Try to fetch from Apps Script endpoint
-    if (API_CONFIG.ANALYTICS_URL) {
-      const url = getProxiedUrl(API_CONFIG.ANALYTICS_URL)
-      
-      try {
-        const response = await apiClient.get(url)
-        return response.data?.analytics || response.data
-      } catch (fetchError) {
-        // If CORS error, try JSONP fallback
-        if (fetchError.message?.includes('CORS') || fetchError.code === 'ERR_NETWORK') {
-          console.warn('CORS error on analytics, attempting JSONP...')
-          return await fetchAnalyticsWithJSONP()
-        }
-        throw fetchError
+function updateOrderStatusWithJSONP(orderId, status) {
+  return new Promise((resolve, reject) => {
+    const callbackName = `jsonp_update_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const script = document.createElement('script')
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('JSONP update request timeout'))
+    }, 10000)
+
+    function cleanup() {
+      clearTimeout(timeout)
+      delete window[callbackName]
+      if (script.parentNode) {
+        script.parentNode.removeChild(script)
       }
     }
+
+    window[callbackName] = (data) => {
+      cleanup()
+      resolve(data)
+    }
+
+    const url = `${API_CONFIG.UPDATE_STATUS_URL}?action=update_status&order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(status)}&callback=${callbackName}`
     
-    // Fallback to client-side computation
-    console.log('Computing analytics client-side...')
-    const { getAnalyticsSummary } = await import('../utils/insights')
-    return getAnalyticsSummary(orders, 'day')
+    script.src = url
+    script.onerror = () => {
+      cleanup()
+      reject(new Error('JSONP update request failed'))
+    }
+
+    document.head.appendChild(script)
+  })
+}
+
+/**
+ * Get analytics data from Apps Script endpoint
+ * @returns {Object} Analytics summary
+ */
+export const getAnalytics = async () => {
+  try {
+    const url = getProxiedUrl(API_CONFIG.ANALYTICS_URL)
+    
+    try {
+      const response = await apiClient.get(url)
+      return response.data?.analytics || response.data
+    } catch (fetchError) {
+      // If CORS error, try JSONP fallback
+      if (fetchError.message?.includes('CORS') || fetchError.code === 'ERR_NETWORK') {
+        console.warn('CORS error on analytics, attempting JSONP...')
+        return await fetchAnalyticsWithJSONP()
+      }
+      throw fetchError
+    }
   } catch (error) {
-    console.error('Error fetching analytics, using client-side computation:', error)
+    console.error('Error fetching analytics:', error)
+    // Return empty analytics object if fetch fails
+    return {
+      total_orders: 0,
+      total_revenue: 0,
+      avg_ticket: 0,
+      top_items: []
+    }
+  }
+}
+
+/**
+ * Get customers data from Apps Script endpoint
+ * @returns {Array} Customers array
+ */
+export const getCustomers = async () => {
+  try {
+    const url = getProxiedUrl(API_CONFIG.CUSTOMERS_URL)
     
-    // Always fallback to client-side as last resort
-    const { getAnalyticsSummary } = await import('../utils/insights')
-    return getAnalyticsSummary(orders, 'day')
+    try {
+      const response = await apiClient.get(url)
+      const customers = response.data?.customers || response.data || []
+      return customers
+    } catch (fetchError) {
+      // If CORS error, try JSONP fallback
+      if (fetchError.message?.includes('CORS') || fetchError.code === 'ERR_NETWORK') {
+        console.warn('CORS error on customers, attempting JSONP...')
+        return await fetchCustomersWithJSONP()
+      }
+      throw fetchError
+    }
+  } catch (error) {
+    console.error('Error fetching customers:', error)
+    return []
   }
 }
 
@@ -337,14 +400,50 @@ function fetchAnalyticsWithJSONP() {
       resolve(data?.analytics || data)
     }
 
-    const url = API_CONFIG.ANALYTICS_URL + 
-                (API_CONFIG.ANALYTICS_URL.includes('?') ? '&' : '?') + 
-                `callback=${callbackName}`
+    const url = API_CONFIG.ANALYTICS_URL + '&callback=' + callbackName
     
     script.src = url
     script.onerror = () => {
       cleanup()
       reject(new Error('JSONP analytics request failed'))
+    }
+
+    document.head.appendChild(script)
+  })
+}
+
+/**
+ * JSONP fallback for customers
+ */
+function fetchCustomersWithJSONP() {
+  return new Promise((resolve, reject) => {
+    const callbackName = `jsonp_customers_${Date.now()}`
+    const script = document.createElement('script')
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('JSONP customers request timeout'))
+    }, 10000)
+
+    function cleanup() {
+      clearTimeout(timeout)
+      delete window[callbackName]
+      if (script.parentNode) {
+        script.parentNode.removeChild(script)
+      }
+    }
+
+    window[callbackName] = (data) => {
+      cleanup()
+      const customers = data?.customers || data || []
+      resolve(customers)
+    }
+
+    const url = API_CONFIG.CUSTOMERS_URL + '&callback=' + callbackName
+    
+    script.src = url
+    script.onerror = () => {
+      cleanup()
+      reject(new Error('JSONP customers request failed'))
     }
 
     document.head.appendChild(script)

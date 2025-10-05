@@ -6,10 +6,11 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Calendar,
-  WifiOff
+  WifiOff,
+  Clock
 } from 'lucide-react'
 import useStore from '../store/useStore'
-import { updateOrderStatus } from '../config/api'
+import { updateOrderStatus, API_CONFIG } from '../config/api'
 import { useOrderPolling } from '../hooks/useOrderPolling'
 import { useToast } from '../components/Toast'
 import OrderCard from '../components/OrderCard'
@@ -32,9 +33,13 @@ function Orders() {
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, orderId: null, newStatus: null })
   const [newOrderIds, setNewOrderIds] = useState(new Set())
+  const [lastUpdated, setLastUpdated] = useState(null)
 
-  // Real-time polling (every 3 seconds, pauses when tab hidden)
+  // Real-time polling (every 10 seconds, pauses when tab hidden)
   const handleOrdersUpdate = useCallback((newOrders) => {
+    // Update last updated timestamp
+    setLastUpdated(new Date())
+
     // Handle offline mode response
     if (newOrders.offline) {
       showToast('You are offline. Showing cached data.', 'warning', 5000)
@@ -63,7 +68,11 @@ function Orders() {
     setOrders(ordersArray)
   }, [orders, setOrders, showToast])
 
-  const { refresh, isOffline, error } = useOrderPolling(handleOrdersUpdate, 3000, true)
+  const { refresh, isOffline, error } = useOrderPolling(
+    handleOrdersUpdate, 
+    API_CONFIG.ORDERS_POLLING_INTERVAL, // 10 seconds
+    true
+  )
 
   // Filter and sort orders
   const filteredOrders = useMemo(() => {
@@ -191,9 +200,22 @@ function Orders() {
       >
         <div>
           <h1 className="text-3xl font-bold text-stone-900">Orders</h1>
-          <p className="text-stone-600 mt-1">
-            {filteredOrders.length} active order{filteredOrders.length !== 1 ? 's' : ''}
-          </p>
+          <div className="flex items-center gap-3 mt-1">
+            <p className="text-stone-600">
+              {filteredOrders.length} active order{filteredOrders.length !== 1 ? 's' : ''}
+            </p>
+            {lastUpdated && (
+              <>
+                <span className="text-stone-400">•</span>
+                <div className="flex items-center gap-1.5 text-stone-500 text-sm">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>
+                    Last updated: {lastUpdated.toLocaleTimeString()}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         <button

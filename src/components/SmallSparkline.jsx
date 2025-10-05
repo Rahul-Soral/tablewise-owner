@@ -48,3 +48,4 @@ function SmallSparkline({ data, color = '#3B82F6', width = 100, height = 30, cla
 export default SmallSparkline
 
 
+

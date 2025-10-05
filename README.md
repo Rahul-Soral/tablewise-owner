@@ -31,71 +31,74 @@ npm run build
 npm run preview
 ```
 
-## 📡 Apps Script Integration
+## 📡 Live API Integration
 
-This app connects to Google Apps Script endpoints for all data operations:
+✅ **FULLY INTEGRATED** - This app now connects to live Google Apps Script endpoints for all data operations.
 
-### API Endpoints
+### API Endpoint
 
-All endpoints are configured in `.env`:
+**Base URL:** `https://script.google.com/macros/s/AKfycbzgFdV0CRvZau4rTwxqITSoyV9WsI1I9P0ErYXg10B2ljrWHqAHXQ5SXGDJRVj8pZo/exec`
 
-```env
-# GET latest orders (polls every 3s)
-VITE_GET_ORDERS_URL=https://script.google.com/macros/s/AKfycbz.../exec?action=getOrders&limit=100
+All actions use this single endpoint with different query parameters:
 
-# POST update order status
-VITE_UPDATE_STATUS_URL=https://script.google.com/macros/s/AKfycbz.../exec
+```bash
+# GET orders (polls every 10 seconds)
+?action=getOrders&limit=100
 
-# POST customer order webhook
-VITE_WEBHOOK_URL=https://script.google.com/macros/s/AKfycbz.../exec
+# POST/GET update status (with JSONP fallback)
+?action=update_status&order_id=...&status=...
 
-# GET analytics data
-VITE_ANALYTICS_URL=https://script.google.com/macros/s/AKfycbz.../exec?action=getAnalytics
+# GET analytics (polls every 30 seconds)
+?action=getAnalytics
+
+# GET customers
+?action=getCustomers
+
+# GET single order
+?action=getOrder&order_id=...
+
+# Ping API status
+?action=ping
 ```
 
-### Where URLs Are Used
+**📖 See [LIVE_API_INTEGRATION.md](./LIVE_API_INTEGRATION.md) for complete documentation.**
 
-1. **`src/config/api.js`** - API configuration and request handlers
-   - `fetchOrders()` - GET_ORDERS_URL with JSONP fallback
-   - `updateOrderStatus()` - UPDATE_STATUS_URL with retry logic
-   - `getAnalytics()` - ANALYTICS_URL with fallback to client-side computation
+### Key Features
 
-2. **`src/hooks/useOrderPolling.js`** - Polling implementation
-   - Polls GET_ORDERS_URL every 3 seconds
-   - Pauses when tab is hidden (Page Visibility API)
-   - Exponential backoff on errors
+✅ **No Mock Data** - All sample/hardcoded data removed  
+✅ **Real-Time Polling** - Orders: 10s, Analytics: 30s  
+✅ **CORS/JSONP Fallback** - Automatic fallback for blocked requests  
+✅ **Offline Mode** - LocalStorage caching with offline indicators  
+✅ **Optimistic UI** - Instant updates with automatic rollback  
+✅ **Last Updated Timestamp** - Shows HH:MM:SS for all data  
+✅ **Test/Debug Tools** - Built-in API testing in Settings page  
+✅ **Error Handling** - Graceful degradation and toast notifications
 
-3. **`.env` / `.env.example`** - Environment configuration
-   - All URLs stored as environment variables
-   - Never hardcoded in source code
+### Quick Testing
 
-4. **`src/pages/Settings.jsx`** - API configuration UI
-   - View active endpoints
-   - Toggle proxy mode
-   - Adjust polling interval
+**Test the API connection:**
+1. Start the development server: `npm run dev`
+2. Navigate to **Settings** page
+3. Click **"Test Fetch Orders"** button
+4. View raw JSON response and request duration
 
-### Request Format
-
-**Update Order Status:**
-```json
-POST UPDATE_STATUS_URL
-{
-  "action": "update_status",
-  "order_id": "ORD-001",
-  "status": "Preparing",
-  "timestamp": "2024-01-01T10:00:00Z"
-}
+**Or use browser console:**
+```javascript
+fetch('https://script.google.com/macros/s/AKfycbzgFdV0CRvZau4rTwxqITSoyV9WsI1I9P0ErYXg10B2ljrWHqAHXQ5SXGDJRVj8pZo/exec?action=getOrders&limit=5')
+  .then(r => r.json())
+  .then(console.log)
 ```
 
 ## ✅ Acceptance Tests / Manual Checklist
 
 ### Critical Path Tests
 
-#### 1. Order Display (< 3 seconds)
+#### 1. Order Display (< 10 seconds)
 - [ ] Place test order in Google Sheet
-- [ ] Within 3 seconds, order appears in Owner Portal
-- [ ] Order shows correct: ID, customer, items, table, timestamp
-- [ ] Live timer starts counting from order creation time
+- [ ] Within 10 seconds, order appears in Owner Portal
+- [ ] Order shows correct: ID, customer, items, total, status, timestamp
+- [ ] "Last updated: HH:MM:SS" displays near top
+- [ ] Empty state shows "No orders yet" with spinner when loading
 
 #### 2. Status Update (< 2 seconds)
 - [ ] Click "Accept" on pending order
@@ -103,19 +106,24 @@ POST UPDATE_STATUS_URL
 - [ ] Within 2 seconds, Google Sheet reflects new status
 - [ ] If API fails, UI rolls back to previous status
 - [ ] Toast notification shows success/error
+- [ ] POST → GET → JSONP fallback chain works
 
 #### 3. Real-Time Polling
 - [ ] Add new order while app is open
-- [ ] Order appears within 3 seconds without refresh
+- [ ] Order appears within 10 seconds without refresh
 - [ ] Switch to another tab, add order
-- [ ] Switch back, order appears within 3 seconds
+- [ ] Switch back, order appears within 10 seconds
 - [ ] No polling occurs while tab is hidden
+- [ ] "Last updated" timestamp updates with each poll
 
-#### 4. Analytics Refresh
+#### 4. Analytics (30-second polling)
 - [ ] Navigate to Analytics page
-- [ ] Charts show current data
-- [ ] Add orders, click refresh
-- [ ] Charts update with new data within 2 seconds
+- [ ] Data fetches from API (not client-side computation)
+- [ ] Shows: total_orders, total_revenue, avg_ticket, top_items
+- [ ] Top 5 items chart displays with Recharts
+- [ ] Click refresh, data updates within 2 seconds
+- [ ] "Last updated" timestamp displays
+- [ ] Auto-refreshes every 30 seconds
 
 #### 5. Offline Mode
 - [ ] Disconnect from internet
@@ -144,10 +152,24 @@ POST UPDATE_STATUS_URL
 - [ ] KPIs calculate correctly
 
 #### Settings Page
-- [ ] View active API endpoints
+- [ ] View active API endpoints (shows hardcoded URLs)
 - [ ] Toggle proxy mode
 - [ ] Adjust polling interval
 - [ ] Save settings persists on reload
+- [ ] **Test Fetch** button works
+- [ ] Raw JSON response displays (first 5 orders)
+- [ ] Shows request duration in milliseconds
+- [ ] Success/error indicators display correctly
+
+#### Customers Page
+- [ ] Fetches from ?action=getCustomers
+- [ ] Displays customer cards with name, phone, email, address
+- [ ] Shows total orders and total spent
+- [ ] Search by name/email/phone works
+- [ ] Sort by name/orders/revenue works
+- [ ] "Repeat Customer" badge shows for repeat customers
+- [ ] Empty state shows "No customers found"
+- [ ] Refresh button works
 
 ## 🚢 Deployment
 

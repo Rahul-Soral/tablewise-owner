@@ -320,3 +320,4 @@ curl "https://script.google.com/macros/s/AKfycbz.../exec?action=getAnalytics"
 **All URLs are configured and integrated!** 🎉
 
 
+
